@@ -191,14 +191,7 @@
   .result .msg { font-size: min(5dvh, 6vw); }
   .result .sub { font-size: min(2.8dvh, 3.8vw); opacity: .85; }
   .overlay.treat .big { color: #ffd23f; text-shadow: 0 0 30px rgba(255, 210, 63, .9), 0 8px 0 #a34a00; }
-  .overlay.treat .emoji { display: flex; gap: min(3dvh, 4vw); }
-  .capsule {
-    width: min(14dvh, 22vw); height: min(14dvh, 22vw); border-radius: 50%;
-    background: linear-gradient(180deg, var(--c) 50%, #fdfbff 50%);
-    border: .8dvh solid #1a0d2b;
-    box-shadow: inset -1.2dvh -1.2dvh 0 rgba(0, 0, 0, .15), 0 0 30px rgba(255, 210, 63, .6);
-    animation: bounce .7s ease-in-out infinite;
-  }
+  .overlay.treat .emoji { animation: bounce .7s ease-in-out infinite; }
   .overlay.treat.show .result { animation: zoomIn .5s cubic-bezier(.2, 1.6, .4, 1); }
   .overlay.trick .big { color: var(--slime); text-shadow: 0 0 30px rgba(166, 226, 46, .9), 0 8px 0 #2d3f06; }
   .overlay.trick .emoji { animation: spook 1s ease-in-out infinite; }
@@ -434,8 +427,11 @@
   L：ゆるモード（何を言ってもOK）<span id="lenientState">OFF</span><br>
   F：全画面表示<br>
   M：BGM のオン／オフ<br>
-  記録：<span id="stats">0回中 当たり0回（ガチャ計0回）</span>
+  R：順番をリセット（次を 1 回目に戻す）<br>
+  次：<span id="nextSpin">1回目（ハズレ）</span><br>
+  記録：<span id="stats">0回中 当たり0回</span>
   <div class="host-actions">
+    <button id="hostReset">↺ リセット</button>
     <button id="hostSpin">手動スピン</button>
     <button id="hostLenient">ゆるモード</button>
     <button id="hostClose">閉じる</button>
@@ -453,7 +449,9 @@
 
   const SEGMENTS = 8;            // 偶数番号のマスが当たり、奇数番号がハズレ
   const SEG_DEG = 360 / SEGMENTS;
-  const GACHA = { 0: 1, 2: 2, 4: 3, 6: 2 };   // 当たりマスごとのガチャを引ける回数
+  // 結果の順番：ハズレ → 当たり を交互に繰り返す（1 回目は必ずハズレ）
+  const PATTERN = [false, true];
+  const COUNT_KEY = 'trickOrTreat.alternateCount';
   const LISTEN_TIMEOUT_MS = 8000;
   const SUSPENSE_RATE = 0.4;     // 止まる直前に「あと1マス…」の演出を入れる確率
   const POWER_MIN_DB = -50;      // この音量以下はパワー 0%
@@ -462,7 +460,13 @@
   let state = 'idle';
   let rotation = 0;
   let lenient = false;
-  let plays = 0, wins = 0, pulls = 0;
+  let plays = 0, wins = 0;
+  // 何回目かはページを再読み込みしても続きから数える（リセットボタンで 1 回目に戻る）
+  let spinCount = 0;
+  try { spinCount = parseInt(localStorage.getItem(COUNT_KEY), 10) || 0; } catch {}
+  function saveSpinCount() {
+    try { localStorage.setItem(COUNT_KEY, String(spinCount)); } catch {}
+  }
 
   /* ================= 背景 ================= */
   const sky = $('sky');
@@ -508,8 +512,7 @@
       const start = i * segRad - Math.PI / 2;
       const end = start + segRad;
       const g = c.createRadialGradient(r, r, r * 0.15, r, r, r * 0.9);
-      if (GACHA[i] === 3) { g.addColorStop(0, '#fff1a8'); g.addColorStop(1, '#e8a800'); }
-      else if (hit) { g.addColorStop(0, '#ffb35c'); g.addColorStop(1, '#e85d00'); }
+      if (hit) { g.addColorStop(0, '#ffb35c'); g.addColorStop(1, '#e85d00'); }
       else     { g.addColorStop(0, '#4a2672'); g.addColorStop(1, '#22103a'); }
       c.beginPath();
       c.moveTo(r, r);
@@ -529,22 +532,11 @@
       c.rotate(Math.PI / 2);
       c.textAlign = 'center';
       c.textBaseline = 'middle';
-      const font = px => `${px}px "Mochiy Pop One", "Hiragino Maru Gothic ProN", sans-serif`;
-      if (hit) {
-        c.fillStyle = GACHA[i] === 3 ? '#5a2a00' : '#fff';
-        c.font = font(r * 0.07);
-        c.fillText('ガチャ', 0, -r * 0.13);
-        c.font = font(r * 0.15);
-        c.fillText(`${GACHA[i]}回`, 0, r * 0.02);
-        c.font = `${r * 0.08}px "Apple Color Emoji", sans-serif`;
-        c.fillText('🎁'.repeat(GACHA[i]), 0, r * 0.16);
-      } else {
-        c.font = `${r * 0.17}px "Apple Color Emoji", sans-serif`;
-        c.fillText('👻', 0, -r * 0.08);
-        c.font = font(r * 0.085);
-        c.fillStyle = '#d9f7a0';
-        c.fillText('ハズレ', 0, r * 0.11);
-      }
+      c.font = `${r * 0.17}px "Apple Color Emoji", sans-serif`;
+      c.fillText(hit ? '🍬' : '👻', 0, -r * 0.08);
+      c.font = `${r * 0.085}px "Mochiy Pop One", "Hiragino Maru Gothic ProN", sans-serif`;
+      c.fillStyle = hit ? '#fff' : '#d9f7a0';
+      c.fillText(hit ? '当たり' : 'ハズレ', 0, r * 0.11);
       c.restore();
     }
 
@@ -927,8 +919,11 @@
     else if (power >= 0.6) say(`いい声！ パワー${pct}%！🔥`);
     else say(`パワー${pct}%… 次はもっと大きな声で！`);
 
-    // 先に結果を 1/2 で決めて、そのマスに止まるように回す
-    const win = Math.random() < 0.5;
+    // 先に結果を順番どおりに決めて、そのマスに止まるように回す
+    const win = PATTERN[spinCount % PATTERN.length];
+    spinCount++;
+    saveSpinCount();
+    renderNext();
     const candidates = [...Array(SEGMENTS).keys()].filter(i => (i % 2 === 0) === win);
     const idx = candidates[Math.floor(Math.random() * candidates.length)];
     const suspense = Math.random() < SUSPENSE_RATE;
@@ -957,26 +952,32 @@
     }
     drumroll.stop();
     await wait(600);
-    showResult(win, GACHA[idx]);
+    showResult(win);
   }
 
   /* ================= 結果表示 ================= */
-  const CAPSULE_COLORS = ['#ff5d8f', '#4cc9f0', '#A6E22E'];
-  function showResult(win, count) {
+  function renderStats() {
+    $('stats').textContent = `${plays}回中 当たり${wins}回`;
+  }
+  function renderNext() {
+    const n = spinCount % PATTERN.length;
+    $('nextSpin').textContent = `${n + 1}回目（${PATTERN[n] ? '当たり' : 'ハズレ'}）`;
+  }
+
+  function showResult(win) {
     setState('result');
     plays++;
-    if (win) { wins++; pulls += count; }
-    $('stats').textContent = `${plays}回中 当たり${wins}回（ガチャ計${pulls}回）`;
+    if (win) wins++;
+    renderStats();
 
     overlay.classList.remove('treat', 'trick');
     if (win) {
       overlay.classList.add('treat');
       $('resBig').textContent = 'TREAT!';
-      $('resEmoji').innerHTML = CAPSULE_COLORS.slice(0, count)
-        .map((c, i) => `<span class="capsule" style="--c:${c}; animation-delay:${i * 0.15}s"></span>`).join('');
-      $('resMsg').textContent = count === 3 ? '大当たり！ ガチャを3回 引いてね！' : `当たり！ ガチャを${count}回 引いてね！`;
+      $('resEmoji').innerHTML = '🍬';
+      $('resMsg').textContent = '当たり！ お菓子をどうぞ！';
       $('resSub').textContent = 'Happy Halloween！🎃';
-      say(`ガチャ${count}回！🎁`);
+      say('おめでとう！🍬');
       overlay.classList.add('show');
       sfx.fanfare();
       celebrate();
@@ -1131,6 +1132,15 @@
     $('lenientState').textContent = lenient ? 'ON' : 'OFF';
     toast(lenient ? 'ゆるモード ON：何を言ってもOK' : 'ゆるモード OFF');
   }
+  function resetOrder() {
+    spinCount = 0;
+    plays = 0;
+    wins = 0;
+    saveSpinCount();
+    renderNext();
+    renderStats();
+    toast('リセットしました：次は 1 回目（ハズレ）');
+  }
   function toggleHost() {
     $('host').classList.toggle('show');
   }
@@ -1138,6 +1148,8 @@
   $('hostSpin').addEventListener('click', () => { ensureAudio(); manualSpin(); });
   $('hostLenient').addEventListener('click', toggleLenient);
   $('hostClose').addEventListener('click', toggleHost);
+  $('hostReset').addEventListener('click', resetOrder);
+  renderNext();
 
   // かぼちゃを長押しすると係の人用パネルを開閉（スマホ用）
   const hub = $('hub');
@@ -1157,6 +1169,8 @@
     } else if (k === 'm') {
       toggleBgm();
       toast(bgm.enabled ? 'BGM ON' : 'BGM OFF');
+    } else if (k === 'r') {
+      resetOrder();
     } else if (k === 'h') {
       toggleHost();
     } else if (k === 'f') {
