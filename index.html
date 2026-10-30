@@ -233,7 +233,7 @@
   }
   .host.show { display: block; }
   .host b { color: var(--orange); }
-  .host-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .host-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .host-actions button {
     font: inherit; color: #fff; cursor: pointer; padding: 6px 12px; border-radius: 8px;
     background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .3);
@@ -425,6 +425,7 @@
   <b>係の人用</b>（H キー／かぼちゃ長押しで開閉）<br>
   S：声なしでルーレットを回す<br>
   L：ゆるモード（何を言ってもOK）<span id="lenientState">OFF</span><br>
+  E：聞き取る言語 <span id="langState">自動（日本語＋英語）</span><br>
   F：全画面表示<br>
   M：BGM のオン／オフ<br>
   R：順番をリセット（次を 1 回目に戻す）<br>
@@ -434,6 +435,7 @@
     <button id="hostReset">↺ リセット</button>
     <button id="hostSpin">手動スピン</button>
     <button id="hostLenient">ゆるモード</button>
+    <button id="hostLang">言語</button>
     <button id="hostClose">閉じる</button>
   </div>
 </div>
@@ -452,7 +454,7 @@
   // 結果の順番：ハズレ → 当たり を交互に繰り返す（1 回目は必ずハズレ）
   const PATTERN = [false, true];
   const COUNT_KEY = 'trickOrTreat.alternateCount';
-  const LISTEN_TIMEOUT_MS = 8000;
+  const LISTEN_TIMEOUT_MS = 10000;
   const SUSPENSE_RATE = 0.4;     // 止まる直前に「あと1マス…」の演出を入れる確率
   const POWER_MIN_DB = -50;      // この音量以下はパワー 0%
   const POWER_MAX_DB = -12;      // この音量以上はパワー 100%
@@ -460,6 +462,8 @@
   let state = 'idle';
   let rotation = 0;
   let lenient = false;
+  let langMode = 'auto';          // auto：日本語と英語を交互に聞く / ja：日本語だけ / en：英語だけ
+  let lastHitLang = 'ja-JP';      // 前回聞き取れた言語（次はこちらから試す）
   let plays = 0, wins = 0;
   // 何回目かはページを再読み込みしても続きから数える（リセットボタンで 1 回目に戻る）
   let spinCount = 0;
@@ -743,7 +747,8 @@
 
   /* ================= 音声認識 ================= */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, listenTimer = null;
+  let rec = null, listenTimer = null, langTurn = 0;
+  const LANG_LABEL = { auto: '自動（日本語＋英語）', ja: '日本語だけ', en: '英語だけ' };
 
   function toKatakana(s) {
     return s.replace(/[ぁ-ゖ]/g, ch => String.fromCharCode(ch.charCodeAt(0) + 0x60));
@@ -751,7 +756,8 @@
   function isMagicWord(text) {
     const t = toKatakana(text.toLowerCase()).replace(/[\s、。・ー\-!！?？.,]/g, '');
     if (lenient) return t.length > 0;
-    return /trick|treat|trik|tric|treet|トリック|トリト|トリート|ドリック|トリックオア|オアトリ/.test(t);
+    // 日本語読み・英語読みのどちらでも、それらしく聞こえたら OK にする
+    return /trick|treat|trik|tric|trig|treet|tree|reat|トリッ|トリク|トリコ|トリト|トリー|トゥリ|チュリ|ドリッ|リート|リック|オアトリ/.test(t);
   }
 
   /* ================= 声の大きさ（パワーメーター） ================= */
@@ -818,18 +824,35 @@
     sfx.ding();
     mic.open().then(ok => { if (ok) mic.meter(); });
 
-    rec = new SR();
-    rec.lang = 'ja-JP';
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 5;
+    langTurn = 0;
+    startRecognizer();
+    listenTimer = setTimeout(() => { if (state === 'listening') failListening(); }, LISTEN_TIMEOUT_MS);
+  }
 
-    rec.onresult = e => {
-      if (state !== 'listening') return;
+  function recognitionLangs() {
+    if (langMode === 'ja') return ['ja-JP'];
+    if (langMode === 'en') return ['en-US'];
+    return lastHitLang === 'en-US' ? ['en-US', 'ja-JP'] : ['ja-JP', 'en-US'];
+  }
+
+  // ひと言ごとに認識が終わるので、そのたびに日本語 ⇄ 英語を切り替えて聞き直す
+  function startRecognizer() {
+    const langs = recognitionLangs();
+    const lang = langs[langTurn % langs.length];
+    const r = new SR();
+    rec = r;
+    r.lang = lang;
+    r.continuous = false;
+    r.interimResults = true;
+    r.maxAlternatives = 5;
+
+    r.onresult = e => {
+      if (state !== 'listening' || rec !== r) return;
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
         for (let j = 0; j < res.length; j++) {
           if (isMagicWord(res[j].transcript)) {
+            lastHitLang = lang;
             say(`「${res[0].transcript}」…！ きこえた！`);
             sfx.heard();
             const power = mic.analyser ? mic.peak : null;
@@ -841,25 +864,22 @@
         say(`「${res[0].transcript}」…？`);
       }
     };
-    rec.onerror = e => {
-      if (state !== 'listening') return;
+    r.onerror = e => {
+      if (state !== 'listening' || rec !== r) return;
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         failListening('マイクが使えないみたい…\nブラウザでマイクを「許可」してね');
       } else if (e.error === 'network') {
         failListening('ネットにつながってないかも…\n（S キーで手動スピンもできるよ）');
-      } else if (e.error !== 'aborted') {
-        failListening();
       }
+      // no-speech などは onend で聞き直す
     };
-    rec.onend = () => {
-      // 制限時間前に認識が止まった場合は再開する
-      if (state === 'listening') {
-        try { rec.start(); } catch { failListening(); }
-      }
+    r.onend = () => {
+      if (state !== 'listening' || rec !== r) return;
+      langTurn++;
+      setTimeout(() => { if (state === 'listening' && rec === r) startRecognizer(); }, 150);
     };
 
-    try { rec.start(); } catch { failListening(); return; }
-    listenTimer = setTimeout(() => { if (state === 'listening') failListening(); }, LISTEN_TIMEOUT_MS);
+    try { r.start(); } catch { failListening(); }
   }
 
   function stopListening() {
@@ -1141,12 +1161,18 @@
     renderStats();
     toast('リセットしました：次は 1 回目（ハズレ）');
   }
+  function cycleLang() {
+    langMode = { auto: 'ja', ja: 'en', en: 'auto' }[langMode];
+    $('langState').textContent = LANG_LABEL[langMode];
+    toast(`聞き取る言語：${LANG_LABEL[langMode]}`);
+  }
   function toggleHost() {
     $('host').classList.toggle('show');
   }
 
   $('hostSpin').addEventListener('click', () => { ensureAudio(); manualSpin(); });
   $('hostLenient').addEventListener('click', toggleLenient);
+  $('hostLang').addEventListener('click', cycleLang);
   $('hostClose').addEventListener('click', toggleHost);
   $('hostReset').addEventListener('click', resetOrder);
   renderNext();
@@ -1164,6 +1190,8 @@
     const k = e.key.toLowerCase();
     if (k === 's') {
       manualSpin();
+    } else if (k === 'e') {
+      cycleLang();
     } else if (k === 'l') {
       toggleLenient();
     } else if (k === 'm') {
