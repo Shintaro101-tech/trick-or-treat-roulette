@@ -11,10 +11,20 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <title>おばけのお菓子ルーレット</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Creepster&family=Mochiy+Pop+One&display=swap" rel="stylesheet">
+<link rel="preload" href="fonts/mochiy-pop-one.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/creepster.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+  /* フォントはアプリに同梱（使う文字だけに絞ったもの）。外部サイトを待たずに表示できる */
+  @font-face {
+    font-family: "Mochiy Pop One";
+    src: url("fonts/mochiy-pop-one.woff2") format("woff2");
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Creepster";
+    src: url("fonts/creepster.woff2") format("woff2");
+    font-display: swap;
+  }
   :root {
     --orange: #FF7A1A;
     --purple: #5B2A86;
@@ -1210,6 +1220,11 @@
 
   if (!SR) {
     say('このブラウザは声を聞けないみたい…Chrome で開いてね');
+  }
+
+  // アプリ一式をスマホに保存しておき、次から素早く開けるようにする
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();
 </script>

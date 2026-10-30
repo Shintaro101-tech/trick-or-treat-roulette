@@ -1,0 +1,4 @@
+Mochiy Pop One (Copyright Fontworks Inc.) and Creepster (Copyright Sideshow)
+are licensed under the SIL Open Font License, Version 1.1.
+https://openfontlicense.org
+These files are subsets downloaded from Google Fonts.
